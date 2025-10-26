@@ -105,9 +105,28 @@ module.exports = function (router) {
             // Validate the task data
             const validationError = newTask.validateSync();
             if (validationError) {
+                // Make error message more readable
+                let errorMessage = validationError.message;
+                
+                // Check for date casting errors
+                if (errorMessage.includes("Cast to date failed")) {
+                    const match = errorMessage.match(/Cast to date failed for value "([^"]+)" \(type string\) at path "([^"]+)"/);
+                    if (match) {
+                        errorMessage = `Invalid date format for ${match[2]}: "${match[1]}"`;
+                    }
+                }
+                // Check for date required errors
+                else if (errorMessage.includes("path `deadline` is required")) {
+                    errorMessage = "deadline is required";
+                }
+                // Check for name required errors
+                else if (errorMessage.includes("path `name` is required")) {
+                    errorMessage = "name is required";
+                }
+                
                 return res.status(400).json({ 
                     message: "Bad Request", 
-                    data: validationError.message 
+                    data: errorMessage 
                 });
             }
 
@@ -152,6 +171,17 @@ module.exports = function (router) {
                 res.status(400).json({ 
                     message: "Bad Request", 
                     data: err.message 
+                });
+            } else if (err.message && err.message.includes("Cast to date failed")) {
+                // Make date error more readable
+                const match = err.message.match(/Cast to date failed for value "([^"]+)" \(type string\) at path "([^"]+)"/);
+                let errorMessage = err.message;
+                if (match) {
+                    errorMessage = `Invalid date format for ${match[2]}: "${match[1]}"`;
+                }
+                res.status(400).json({ 
+                    message: "Bad Request", 
+                    data: errorMessage 
                 });
             } else {
                 res.status(500).json({ 
@@ -243,7 +273,7 @@ module.exports = function (router) {
 
             // Determine if the assignedUser is changing
             const newAssignedUser = req.body.assignedUser;
-            const isAssignedUserChanging = newAssignedUser !== existingTask.assignedUser;
+            // const isAssignedUserChanging = newAssignedUser !== existingTask.assignedUser;
 
             // If new assignedUser is provided, validate it exists and update assignedUserName
             if (req.body.assignedUser) {
@@ -278,43 +308,21 @@ module.exports = function (router) {
                 req.body.assignedUser = "";
                 req.body.assignedUserName = "unassigned";
             }
-
-            // Handle task assignment and completion status changes
-            if (isAssignedUserChanging) {
-                // Remove task from old user's pendingTasks
-                if (existingTask.assignedUser) {
-                    await User.findByIdAndUpdate(
-                        existingTask.assignedUser,
-                        { $pull: { pendingTasks: taskId } }
-                    );
-                }
-                
-                // Add task to new user's pendingTasks only if not completed
-                if (req.body.assignedUser && !req.body.completed) {
-                    await User.findByIdAndUpdate(
-                        req.body.assignedUser,
-                        { $addToSet: { pendingTasks: taskId } }
-                    );
-                }
-            } else {
-                // AssignedUser is not changing, just handle completion status
-                const targetUser = req.body.assignedUser || existingTask.assignedUser;
-                
-                if (targetUser) {
-                    if (req.body.completed === true && !existingTask.completed) {
-                        // Task is being marked as completed, remove from user's pendingTasks
-                        await User.findByIdAndUpdate(
-                            targetUser,
-                            { $pull: { pendingTasks: taskId } }
-                        );
-                    } else if (req.body.completed === false && existingTask.completed) {
-                        // Task is being marked as not completed, add back to user's pendingTasks
-                        await User.findByIdAndUpdate(
-                            targetUser,
-                            { $addToSet: { pendingTasks: taskId } }
-                        );
-                    }
-                }
+            
+            // Remove task from old user's pendingTasks
+            if (existingTask.assignedUser) {
+                await User.findByIdAndUpdate(
+                    existingTask.assignedUser,
+                    { $pull: { pendingTasks: taskId } }
+                );
+            }
+            
+            // Add task to new user's pendingTasks only if not completed
+            if (req.body.assignedUser && !req.body.completed) {
+                await User.findByIdAndUpdate(
+                    req.body.assignedUser,
+                    { $addToSet: { pendingTasks: taskId } }
+                );
             }
 
             // Update the task
@@ -333,6 +341,17 @@ module.exports = function (router) {
                 res.status(400).json({ 
                     message: "Bad Request", 
                     data: err.message 
+                });
+            } else if (err.message && err.message.includes("Cast to date failed")) {
+                // Make date error more readable
+                const match = err.message.match(/Cast to date failed for value "([^"]+)" \(type string\) at path "([^"]+)"/);
+                let errorMessage = err.message;
+                if (match) {
+                    errorMessage = `Invalid date format for ${match[2]}: "${match[1]}"`;
+                }
+                res.status(400).json({ 
+                    message: "Bad Request", 
+                    data: errorMessage 
                 });
             } else {
                 res.status(500).json({ 

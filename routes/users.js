@@ -160,13 +160,18 @@ module.exports = function (router) {
 
             // Save the user to database
             const savedUser = await newUser.save();
+            let userToReturn = savedUser;
             
             // Update tasks to reference this user
             if (req.body.pendingTasks && Array.isArray(req.body.pendingTasks)) {
                 for (const taskId of req.body.pendingTasks) {
-                    // Remove this task from any user who currently has it in their pendingTasks
+                    // Remove this task from any OTHER user who currently has it in their pendingTasks
+                    // Exclude the newly created user to avoid removing from itself
                     await User.updateMany(
-                        { pendingTasks: taskId },
+                        { 
+                            pendingTasks: taskId,
+                            _id: { $ne: savedUser._id }
+                        },
                         { $pull: { pendingTasks: taskId } }
                     );
                     
@@ -176,12 +181,15 @@ module.exports = function (router) {
                         assignedUserName: savedUser.name
                     });
                 }
+                
+                // Reload the user to get the most up-to-date data
+                userToReturn = await User.findById(savedUser._id);
             }
             
             // Respond with details of the new user
             res.status(201).json({ 
                 message: "Created", 
-                data: savedUser 
+                data: userToReturn 
             });
         } catch (err) {
             if (err.code === 11000) {
