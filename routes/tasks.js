@@ -271,10 +271,7 @@ module.exports = function (router) {
                 });
             }
 
-            // Determine if the assignedUser is changing
-            const newAssignedUser = req.body.assignedUser;
-            // const isAssignedUserChanging = newAssignedUser !== existingTask.assignedUser;
-
+    
             // If new assignedUser is provided, validate it exists and update assignedUserName
             if (req.body.assignedUser) {
                 // Check if assignedUser is a valid ObjectId format
@@ -318,7 +315,15 @@ module.exports = function (router) {
             }
             
             // Add task to new user's pendingTasks only if not completed
-            if (req.body.assignedUser && !req.body.completed) {
+            // Convert completed to proper boolean - only explicit true values are considered completed
+            const completedValue = req.body.completed === true || req.body.completed === 'true' || String(req.body.completed).toLowerCase() === 'true';
+            
+            console.log("req.body.assignedUser:", req.body.assignedUser);
+            console.log("req.body.completed raw:", req.body.completed);
+            console.log("Completed value after conversion:", completedValue);
+            
+            if (req.body.assignedUser && !completedValue) {
+                console.log("Adding task to new user's pendingTasks");
                 await User.findByIdAndUpdate(
                     req.body.assignedUser,
                     { $addToSet: { pendingTasks: taskId } }
