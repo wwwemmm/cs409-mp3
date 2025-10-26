@@ -231,25 +231,51 @@ module.exports = function (router) {
 
             // Handle pendingTasks two-way reference
             if (req.body.pendingTasks && Array.isArray(req.body.pendingTasks)) {
-                // Remove tasks from previous assignment if they're being reassigned
-                for (const taskId of existingUser.pendingTasks || []) {
-                    if (!req.body.pendingTasks.includes(taskId)) {
-                        // Task is being removed from this user's pendingTasks
-                        await Task.findByIdAndUpdate(taskId, {
-                            assignedUser: "",
-                            assignedUserName: "unassigned"
+                // Validate all task IDs are valid ObjectIds
+                for (const taskId of req.body.pendingTasks) {
+                    if (!mongoose.Types.ObjectId.isValid(taskId)) {
+                        return res.status(400).json({ 
+                            message: "Bad Request", 
+                            data: `Pending Task not found: ${taskId}` 
                         });
                     }
                 }
 
-                // Add tasks to new assignment
-                for (const taskId of req.body.pendingTasks) {
+                // Get all new tasks to be assigned to this user
+                const newTaskIds = new Set(req.body.pendingTasks);
+                const oldTaskIds = new Set(existingUser.pendingTasks || []);
+
+                // For each new task, check if it needs to be transferred from another user
+                for (const taskId of newTaskIds) {
                     // Validate task exists
                     const task = await Task.findById(taskId);
-                    if (task) {
+                    if (!task) {
+                        return res.status(400).json({ 
+                            message: "Bad Request", 
+                            data: `Pending Task not found: ${taskId}` 
+                        });
+                    }
+                    
+                    // Remove this task from any user who currently has it in their pendingTasks
+                    // This ensures we clean up any inconsistencies
+                    await User.updateMany(
+                        { pendingTasks: taskId },
+                        { $pull: { pendingTasks: taskId } }
+                    );
+                    
+                    // Update task assignment
+                    await Task.findByIdAndUpdate(taskId, {
+                        assignedUser: userId,
+                        assignedUserName: req.body.name
+                    });
+                }
+
+                // For tasks that are being removed from this user, unassign them
+                for (const taskId of oldTaskIds) {
+                    if (!newTaskIds.has(taskId)) {
                         await Task.findByIdAndUpdate(taskId, {
-                            assignedUser: userId,
-                            assignedUserName: req.body.name
+                            assignedUser: "",
+                            assignedUserName: "unassigned"
                         });
                     }
                 }
@@ -277,6 +303,11 @@ module.exports = function (router) {
                 res.status(400).json({ 
                     message: "Bad Request", 
                     data: "User with this email already exists" 
+                });
+            } else if (err.message && err.message.includes("Cast to ObjectId failed")) {
+                res.status(400).json({ 
+                    message: "Bad Request", 
+                    data: err.message 
                 });
             } else {
                 res.status(500).json({ 

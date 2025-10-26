@@ -148,10 +148,17 @@ module.exports = function (router) {
                 data: savedTask 
             });
         } catch (err) {
-            res.status(500).json({ 
-                message: "Internal Server Error", 
-                data: err.message 
-            });
+            if (err.message && err.message.includes("Cast to ObjectId failed")) {
+                res.status(400).json({ 
+                    message: "Bad Request", 
+                    data: err.message 
+                });
+            } else {
+                res.status(500).json({ 
+                    message: "Internal Server Error", 
+                    data: err.message 
+                });
+            }
         }
     });
 
@@ -322,10 +329,17 @@ module.exports = function (router) {
                 data: updatedTask 
             });
         } catch (err) {
-            res.status(500).json({ 
-                message: "Internal Server Error", 
-                data: err.message 
-            });
+            if (err.message && err.message.includes("Cast to ObjectId failed")) {
+                res.status(400).json({ 
+                    message: "Bad Request", 
+                    data: err.message 
+                });
+            } else {
+                res.status(500).json({ 
+                    message: "Internal Server Error", 
+                    data: err.message 
+                });
+            }
         }
     });
 
@@ -367,10 +381,17 @@ module.exports = function (router) {
                 data: null 
             });
         } catch (err) {
-            res.status(500).json({ 
-                message: "Internal Server Error", 
-                data: err.message 
-            });
+            if (err.message && err.message.includes("Cast to ObjectId failed")) {
+                res.status(400).json({ 
+                    message: "Bad Request", 
+                    data: err.message 
+                });
+            } else {
+                res.status(500).json({ 
+                    message: "Internal Server Error", 
+                    data: err.message 
+                });
+            }
         }
     });
 
