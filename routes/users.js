@@ -114,6 +114,38 @@ module.exports = function (router) {
                 });
             }
 
+            // Validate pendingTasks format
+            if (req.body.pendingTasks !== undefined && !Array.isArray(req.body.pendingTasks)) {
+                return res.status(400).json({ 
+                    message: "Bad Request", 
+                    data: "pendingTasks must be an array" 
+                });
+            }
+
+            // Validate pendingTasks if provided
+            if (req.body.pendingTasks && Array.isArray(req.body.pendingTasks)) {
+                // Validate all task IDs are valid ObjectIds
+                for (const taskId of req.body.pendingTasks) {
+                    if (!mongoose.Types.ObjectId.isValid(taskId)) {
+                        return res.status(400).json({ 
+                            message: "Bad Request", 
+                            data: `Invalid task ID format: ${taskId}` 
+                        });
+                    }
+                }
+
+                // Validate all tasks exist
+                for (const taskId of req.body.pendingTasks) {
+                    const task = await Task.findById(taskId);
+                    if (!task) {
+                        return res.status(400).json({ 
+                            message: "Bad Request", 
+                            data: `Pending Task not found: ${taskId}` 
+                        });
+                    }
+                }
+            }
+
             // Create new user instance
             const newUser = new User(req.body);
             
@@ -128,6 +160,23 @@ module.exports = function (router) {
 
             // Save the user to database
             const savedUser = await newUser.save();
+            
+            // Update tasks to reference this user
+            if (req.body.pendingTasks && Array.isArray(req.body.pendingTasks)) {
+                for (const taskId of req.body.pendingTasks) {
+                    // Remove this task from any user who currently has it in their pendingTasks
+                    await User.updateMany(
+                        { pendingTasks: taskId },
+                        { $pull: { pendingTasks: taskId } }
+                    );
+                    
+                    // Update task assignment
+                    await Task.findByIdAndUpdate(taskId, {
+                        assignedUser: savedUser._id.toString(),
+                        assignedUserName: savedUser.name
+                    });
+                }
+            }
             
             // Respond with details of the new user
             res.status(201).json({ 
@@ -217,6 +266,14 @@ module.exports = function (router) {
                 return res.status(400).json({ 
                     message: "Bad Request", 
                     data: "Name and email are required" 
+                });
+            }
+
+            // Validate pendingTasks format
+            if (req.body.pendingTasks !== undefined && !Array.isArray(req.body.pendingTasks)) {
+                return res.status(400).json({ 
+                    message: "Bad Request", 
+                    data: "pendingTasks must be an array" 
                 });
             }
 
