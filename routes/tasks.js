@@ -48,9 +48,9 @@ module.exports = function (router) {
         }
 
         // Handle limit parameter (default 100 for tasks)
-        if (req.query.limit) {
+        if (req.query.limit !== undefined) {
             const limit = parseInt(req.query.limit);
-            if (!isNaN(limit) && limit > 0) {
+            if (!isNaN(limit) && limit >= 0) {
                 query.limit(limit);
             }
         } else {
@@ -68,7 +68,9 @@ module.exports = function (router) {
 
             // Handle count parameter
             if (req.query.count === 'true') {
-                const count = await Task.countDocuments(query.getQuery());
+                // Get the actual results (respecting skip and limit)
+                const tasks = await query.exec();
+                const count = tasks.length;
                 return res.status(200).json({ 
                     message: "OK", 
                     data: count 
@@ -81,9 +83,17 @@ module.exports = function (router) {
                 data: tasks 
             });
         } catch (err) {
+            // Handle Cast to ObjectId errors
+            let errorMessage = err.message;
+            if (errorMessage.includes("Cast to ObjectId failed")) {
+                const match = errorMessage.match(/Cast to ObjectId failed for value "([^"]+)" \(type [^)]+\) at path "([^"]+)"/);
+                if (match) {
+                    errorMessage = `Invalid ID format for ${match[2]}: ${match[1]}`;
+                }
+            }
             res.status(400).json({ 
                 message: "Bad Request", 
-                data: err.message 
+                data: errorMessage 
             });
         }
     });
@@ -91,6 +101,14 @@ module.exports = function (router) {
     // POST /tasks - Create a new task and respond with details of the new task
     tasksRoute.post(async function (req, res) {
         try {
+            // Reject if dateCreated is provided (should be set by server)
+            if (req.body.dateCreated !== undefined) {
+                return res.status(400).json({ 
+                    message: "Bad Request", 
+                    data: "dateCreated cannot be provided and will be set automatically by the server" 
+                });
+            }
+            
             // Validate required fields
             if (!req.body.name || !req.body.deadline) {
                 return res.status(400).json({ 
@@ -168,9 +186,16 @@ module.exports = function (router) {
             });
         } catch (err) {
             if (err.message && err.message.includes("Cast to ObjectId failed")) {
+                // Parse the error to make it more readable
+                let errorMessage = err.message;
+                // Try to extract path and value from the error message
+                const match = errorMessage.match(/Cast to ObjectId failed for value "([^"]+)" \(type [^)]+\) at path "([^"]+)"/);
+                if (match) {
+                    errorMessage = `Invalid ID format for ${match[2]}: ${match[1]}`;
+                }
                 res.status(400).json({ 
                     message: "Bad Request", 
-                    data: err.message 
+                    data: errorMessage 
                 });
             } else if (err.message && err.message.includes("Cast to date failed")) {
                 // Make date error more readable
@@ -262,6 +287,14 @@ module.exports = function (router) {
                 });
             }
 
+            // Reject if dateCreated is provided (cannot be modified)
+            if (req.body.dateCreated !== undefined) {
+                return res.status(400).json({ 
+                    message: "Bad Request", 
+                    data: "dateCreated cannot be modified" 
+                });
+            }
+
             // Find the existing task
             const existingTask = await Task.findById(taskId);
             if (!existingTask) {
@@ -306,11 +339,14 @@ module.exports = function (router) {
                 req.body.assignedUserName = "unassigned";
             }
             
+            // Normalize taskId to string for pendingTasks array consistency
+            const taskIdStr = String(taskId);
+            
             // Remove task from old user's pendingTasks
             if (existingTask.assignedUser) {
                 await User.findByIdAndUpdate(
                     existingTask.assignedUser,
-                    { $pull: { pendingTasks: taskId } }
+                    { $pull: { pendingTasks: taskIdStr } }
                 );
             }
             
@@ -318,15 +354,10 @@ module.exports = function (router) {
             // Convert completed to proper boolean - only explicit true values are considered completed
             const completedValue = req.body.completed === true || req.body.completed === 'true' || String(req.body.completed).toLowerCase() === 'true';
             
-            console.log("req.body.assignedUser:", req.body.assignedUser);
-            console.log("req.body.completed raw:", req.body.completed);
-            console.log("Completed value after conversion:", completedValue);
-            
             if (req.body.assignedUser && !completedValue) {
-                console.log("Adding task to new user's pendingTasks");
                 await User.findByIdAndUpdate(
                     req.body.assignedUser,
-                    { $addToSet: { pendingTasks: taskId } }
+                    { $addToSet: { pendingTasks: taskIdStr } }
                 );
             }
 
@@ -343,9 +374,16 @@ module.exports = function (router) {
             });
         } catch (err) {
             if (err.message && err.message.includes("Cast to ObjectId failed")) {
+                // Parse the error to make it more readable
+                let errorMessage = err.message;
+                // Try to extract path and value from the error message
+                const match = errorMessage.match(/Cast to ObjectId failed for value "([^"]+)" \(type [^)]+\) at path "([^"]+)"/);
+                if (match) {
+                    errorMessage = `Invalid ID format for ${match[2]}: ${match[1]}`;
+                }
                 res.status(400).json({ 
                     message: "Bad Request", 
-                    data: err.message 
+                    data: errorMessage 
                 });
             } else if (err.message && err.message.includes("Cast to date failed")) {
                 // Make date error more readable
@@ -391,24 +429,30 @@ module.exports = function (router) {
 
             // Remove task from user's pendingTasks if it was assigned
             if (task.assignedUser) {
+                const taskIdStr = String(taskId);
                 await User.findByIdAndUpdate(
                     task.assignedUser,
-                    { $pull: { pendingTasks: taskId } }
+                    { $pull: { pendingTasks: taskIdStr } }
                 );
             }
 
             // Delete the task
             await Task.findByIdAndDelete(taskId);
 
-            res.status(204).json({ 
-                message: "No Content", 
-                data: null 
-            });
+            // Return 204 No Content with no response body for successful deletion
+            res.status(204).send();
         } catch (err) {
             if (err.message && err.message.includes("Cast to ObjectId failed")) {
+                // Parse the error to make it more readable
+                let errorMessage = err.message;
+                // Try to extract path and value from the error message
+                const match = errorMessage.match(/Cast to ObjectId failed for value "([^"]+)" \(type [^)]+\) at path "([^"]+)"/);
+                if (match) {
+                    errorMessage = `Invalid ID format for ${match[2]}: ${match[1]}`;
+                }
                 res.status(400).json({ 
                     message: "Bad Request", 
-                    data: err.message 
+                    data: errorMessage 
                 });
             } else {
                 res.status(500).json({ 

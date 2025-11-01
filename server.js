@@ -29,7 +29,15 @@ app.use(allowCrossDomain);
 app.use(bodyParser.urlencoded({
     extended: true
 }));
-app.use(bodyParser.json());
+app.use(bodyParser.json({
+    verify: function(req, res, buf) {
+        try {
+            JSON.parse(buf.toString());
+        } catch(e) {
+            throw new Error('Invalid JSON format');
+        }
+    }
+}));
 
 // Use routes as a module (see index.js)
 require('./routes')(app, router);
@@ -39,6 +47,23 @@ app.use('*', function(req, res) {
     res.status(404).json({
         message: "Not Found",
         data: "Endpoint not found"
+    });
+});
+
+// Error handling middleware - must be last
+app.use((err, req, res, next) => {
+    // Handle JSON parsing errors
+    if (err.message === 'Invalid JSON format' || (err instanceof SyntaxError && err.status === 400 && 'body' in err)) {
+        return res.status(400).json({
+            message: "Bad Request",
+            data: "Invalid JSON format in request body"
+        });
+    }
+    
+    // Handle other errors
+    res.status(err.status || 500).json({
+        message: "Internal Server Error",
+        data: err.message || "An error occurred"
     });
 });
 

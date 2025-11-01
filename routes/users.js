@@ -7,6 +7,36 @@ module.exports = function (router) {
     const usersRoute = router.route("/users");
     const usersIdRoute = router.route("/users/:id");
 
+    // Helper function to validate and clean request body
+    function validateRequestBody(req, res, allowedFields) {
+        // Check for system-managed fields
+        const forbiddenFields = ['_id', 'dateCreated'];
+        for (const field of forbiddenFields) {
+            if (req.body[field] !== undefined) {
+                res.status(400).json({
+                    message: "Bad Request",
+                    data: `${field} cannot be provided and will be set automatically by the server`
+                });
+                return false;
+            }
+        }
+        
+        // Check for unknown fields (optional - strict validation)
+        // Uncomment this block if you want to reject unknown fields
+        /*
+        const unknownFields = Object.keys(req.body).filter(key => !allowedFields.includes(key));
+        if (unknownFields.length > 0) {
+            res.status(400).json({
+                message: "Bad Request",
+                data: `Unknown fields: ${unknownFields.join(", ")}. Allowed fields: ${allowedFields.join(", ")}`
+            });
+            return false;
+        }
+        */
+        
+        return true; // No error
+    }
+
     // Helper function to build query from parameters
     function buildQuery(query, req) {
         // Handle where parameter
@@ -48,9 +78,9 @@ module.exports = function (router) {
         }
 
         // Handle limit parameter
-        if (req.query.limit) {
+        if (req.query.limit !== undefined) {
             const limit = parseInt(req.query.limit);
-            if (!isNaN(limit) && limit > 0) {
+            if (!isNaN(limit) && limit >= 0) {
                 query.limit(limit);
             }
         }
@@ -66,7 +96,9 @@ module.exports = function (router) {
 
             // Handle count parameter
             if (req.query.count === 'true') {
-                const count = await User.countDocuments(query.getQuery());
+                // Get the actual results (respecting skip and limit)
+                const users = await query.exec();
+                const count = users.length;
                 return res.status(200).json({ 
                     message: "OK", 
                     data: count 
@@ -75,30 +107,22 @@ module.exports = function (router) {
 
             const users = await query.exec();
             
-            // Check if we're searching for a specific user by _id and no results found
-            if (req.query.where) {
-                try {
-                    const whereClause = JSON.parse(req.query.where);
-                    // If searching by _id and no results, return 404
-                    if (whereClause._id && users.length === 0) {
-                        return res.status(404).json({ 
-                            message: "User not Found", 
-                            data: "User not found" 
-                        });
-                    }
-                } catch (err) {
-                    // Invalid where clause, continue with normal flow
-                }
-            }
-            
             res.status(200).json({ 
                 message: "OK", 
                 data: users 
             });
         } catch (err) {
+            // Handle Cast to ObjectId errors
+            let errorMessage = err.message;
+            if (errorMessage.includes("Cast to ObjectId failed")) {
+                const match = errorMessage.match(/Cast to ObjectId failed for value "([^"]+)" \(type [^)]+\) at path "([^"]+)"/);
+                if (match) {
+                    errorMessage = `Invalid ID format for ${match[2]}: ${match[1]}`;
+                }
+            }
             res.status(400).json({ 
                 message: "Bad Request", 
-                data: err.message 
+                data: errorMessage 
             });
         }
     });
@@ -106,6 +130,12 @@ module.exports = function (router) {
     // POST /users - Create a new user and respond with details of the new user
     usersRoute.post(async function (req, res) {
         try {
+            // Validate request body for forbidden fields
+            const allowedFields = ['name', 'email', 'pendingTasks'];
+            if (!validateRequestBody(req, res, allowedFields)) {
+                return;
+            }
+            
             // Validate required fields
             if (!req.body.name || !req.body.email) {
                 return res.status(400).json({ 
@@ -269,19 +299,17 @@ module.exports = function (router) {
                 });
             }
             
+            // Validate request body for forbidden fields
+            const allowedFields = ['name', 'email', 'pendingTasks'];
+            if (!validateRequestBody(req, res, allowedFields)) {
+                return;
+            }
+            
             // Validate required fields
             if (!req.body.name || !req.body.email) {
                 return res.status(400).json({ 
                     message: "Bad Request", 
                     data: "Name and email are required" 
-                });
-            }
-
-            // Validate pendingTasks format
-            if (req.body.pendingTasks !== undefined && !Array.isArray(req.body.pendingTasks)) {
-                return res.status(400).json({ 
-                    message: "Bad Request", 
-                    data: "pendingTasks must be an array" 
                 });
             }
 
@@ -295,56 +323,69 @@ module.exports = function (router) {
             }
 
             // Handle pendingTasks two-way reference
-            if (req.body.pendingTasks && Array.isArray(req.body.pendingTasks)) {
-                // Validate all task IDs are valid ObjectIds
-                for (const taskId of req.body.pendingTasks) {
-                    if (!mongoose.Types.ObjectId.isValid(taskId)) {
-                        return res.status(400).json({ 
-                            message: "Bad Request", 
-                            data: `Pending Task not found: ${taskId}` 
-                        });
-                    }
-                }
+            // For PUT, if pendingTasks is not provided, treat it as empty array (full replacement)
+            const newPendingTasks = req.body.pendingTasks !== undefined ? req.body.pendingTasks : [];
+            
+            if (!Array.isArray(newPendingTasks)) {
+                return res.status(400).json({ 
+                    message: "Bad Request", 
+                    data: "pendingTasks must be an array" 
+                });
+            }
 
-                // Get all new tasks to be assigned to this user
-                const newTaskIds = new Set(req.body.pendingTasks);
-                const oldTaskIds = new Set(existingUser.pendingTasks || []);
+            // Get all new tasks to be assigned to this user
+            const newTaskIds = new Set(newPendingTasks);
+            const oldTaskIds = new Set(existingUser.pendingTasks || []);
 
-                // For each new task, check if it needs to be transferred from another user
-                for (const taskId of newTaskIds) {
-                    // Validate task exists
-                    const task = await Task.findById(taskId);
-                    if (!task) {
-                        return res.status(400).json({ 
-                            message: "Bad Request", 
-                            data: `Pending Task not found: ${taskId}` 
-                        });
-                    }
-                    
-                    // Remove this task from any user who currently has it in their pendingTasks
-                    // This ensures we clean up any inconsistencies
-                    await User.updateMany(
-                        { pendingTasks: taskId },
-                        { $pull: { pendingTasks: taskId } }
-                    );
-                    
-                    // Update task assignment
-                    await Task.findByIdAndUpdate(taskId, {
-                        assignedUser: userId,
-                        assignedUserName: req.body.name
+            // First, validate all task IDs exist in the database before making any changes
+            for (const taskId of newTaskIds) {
+                // Validate task ID format
+                if (!mongoose.Types.ObjectId.isValid(taskId)) {
+                    return res.status(400).json({ 
+                        message: "Bad Request", 
+                        data: `Invalid task ID format: ${taskId}` 
                     });
                 }
-
-                // For tasks that are being removed from this user, unassign them
-                for (const taskId of oldTaskIds) {
-                    if (!newTaskIds.has(taskId)) {
-                        await Task.findByIdAndUpdate(taskId, {
-                            assignedUser: "",
-                            assignedUserName: "unassigned"
-                        });
-                    }
+                
+                // Validate task exists
+                const task = await Task.findById(taskId);
+                if (!task) {
+                    return res.status(400).json({ 
+                        message: "Bad Request", 
+                        data: `Pending Task not found: ${taskId}` 
+                    });
                 }
             }
+
+            // After all validations pass, perform the updates
+            for (const taskId of newTaskIds) {
+                // Remove this task from any user who currently has it in their pendingTasks
+                // This ensures we clean up any inconsistencies
+                await User.updateMany(
+                    { pendingTasks: taskId },
+                    { $pull: { pendingTasks: taskId } }
+                );
+                
+                // Update task assignment
+                await Task.findByIdAndUpdate(taskId, {
+                    assignedUser: userId,
+                    assignedUserName: req.body.name,
+                    completed: false,
+                });
+            }
+
+            // For tasks that are being removed from this user, unassign them
+            for (const taskId of oldTaskIds) {
+                if (!newTaskIds.has(taskId)) {
+                    await Task.findByIdAndUpdate(taskId, {
+                        assignedUser: "",
+                        assignedUserName: "unassigned"
+                    });
+                }
+            }
+            
+            // Update req.body.pendingTasks to the calculated value
+            req.body.pendingTasks = newPendingTasks;
 
             // Find and update user
             const updatedUser = await User.findByIdAndUpdate(
@@ -370,9 +411,17 @@ module.exports = function (router) {
                     data: "User with this email already exists" 
                 });
             } else if (err.message && err.message.includes("Cast to ObjectId failed")) {
+                // Parse the error to make it more readable
+                let errorMessage = err.message;
+                // Try to extract path and value from the error message
+                // Format: "Cast to ObjectId failed for value \"xxx\" (type string) at path \"path\" for model \"Model\""
+                const match = errorMessage.match(/Cast to ObjectId failed for value "([^"]+)" \(type [^)]+\) at path "([^"]+)"/);
+                if (match) {
+                    errorMessage = `Invalid ID format for ${match[2]}: ${match[1]}`;
+                }
                 res.status(400).json({ 
                     message: "Bad Request", 
-                    data: err.message 
+                    data: errorMessage 
                 });
             } else {
                 res.status(500).json({ 
@@ -417,10 +466,8 @@ module.exports = function (router) {
             // Delete the user
             await User.findByIdAndDelete(userId);
 
-            res.status(204).json({ 
-                message: "No Content", 
-                data: null 
-            });
+            // Return 204 No Content with no response body for successful deletion
+            res.status(204).send();
         } catch (err) {
             res.status(500).json({ 
                 message: "Internal Server Error", 
